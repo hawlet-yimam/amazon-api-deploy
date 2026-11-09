@@ -9,92 +9,81 @@ const path = require("path");
 
 dotenv.config();
 
-// ==================================
+// =====================================
 // ENVIRONMENT VARIABLES
-// ==================================
+// =====================================
 
 const PORT = process.env.PORT || 5000;
-
 const STRIPE_KEY = process.env.STRIPE_KEY;
-const STRIPE_WEBHOOK_SECRET =
-  process.env.STRIPE_WEBHOOK_SECRET;
+const STRIPE_WEBHOOK_SECRET = process.env.STRIPE_WEBHOOK_SECRET;
 
 const FRONTEND_URL = (
   process.env.FRONTEND_URL ||
-  "https://app-rgah.vercel.app"
+  "https://amazon-clone-rho-umber.vercel.app"
 ).replace(/\/+$/, "");
 
 if (!STRIPE_KEY) {
-  throw new Error("STRIPE_KEY is missing");
+  throw new Error("STRIPE_KEY is missing from environment variables");
 }
 
 if (!STRIPE_WEBHOOK_SECRET) {
-  throw new Error("STRIPE_WEBHOOK_SECRET is missing");
+  throw new Error("STRIPE_WEBHOOK_SECRET is missing from environment variables");
 }
 
-// ==================================
+// =====================================
 // STRIPE INITIALIZATION
-// ==================================
+// =====================================
 
 const stripe = stripePackage(STRIPE_KEY);
 
-// ==================================
+// =====================================
 // FIREBASE ADMIN INITIALIZATION
-// ==================================
-
-const serviceAccountPath = path.join(
-  __dirname,
-  "serviceAccountKey.json"
-);
+// =====================================
 
 let serviceAccount;
 
-try {
-  if (process.env.FIREBASE_SERVICE_ACCOUNT_JSON) {
-    serviceAccount = JSON.parse(
-      process.env.FIREBASE_SERVICE_ACCOUNT_JSON
-    );
-  } else if (fs.existsSync(serviceAccountPath)) {
-    serviceAccount = JSON.parse(
-      fs.readFileSync(serviceAccountPath, "utf8")
-    );
-  } else {
+if (process.env.FIREBASE_SERVICE_ACCOUNT_JSON) {
+  serviceAccount = JSON.parse(
+    process.env.FIREBASE_SERVICE_ACCOUNT_JSON
+  );
+} else {
+  const serviceAccountPath = path.join(
+    __dirname,
+    "serviceAccountKey.json"
+  );
+
+  if (!fs.existsSync(serviceAccountPath)) {
     throw new Error(
-      "Firebase service account credentials not found"
+      "Firebase service account is missing. Set FIREBASE_SERVICE_ACCOUNT_JSON."
     );
   }
-} catch (error) {
-  console.error(
-    "Firebase credentials error:",
-    error.message
-  );
-  throw error;
+
+  serviceAccount = require(serviceAccountPath);
 }
 
 if (!admin.apps.length) {
   admin.initializeApp({
-    credential: admin.credential.cert(serviceAccount)
+    credential: admin.credential.cert(serviceAccount),
   });
 }
 
 const db = admin.firestore();
-const FieldValue = admin.firestore.FieldValue;
 
-// ==================================
+// =====================================
 // EXPRESS APP
-// ==================================
+// =====================================
 
 const app = express();
 
-// ==================================
+// =====================================
 // CORS CONFIGURATION
-// ==================================
+// =====================================
 
 const allowedOrigins = [
   "http://localhost:5173",
-  "https://app-rgah.vercel.app",
-  FRONTEND_URL
-].filter(Boolean);
+  "https://amazon-clone-rho-umber.vercel.app",
+  FRONTEND_URL,
+];
 
 const corsOptions = {
   origin: function (origin, callback) {
@@ -102,11 +91,9 @@ const corsOptions = {
       return callback(null, true);
     }
 
-    console.error("Blocked by CORS:", origin);
+    console.log("CORS blocked origin:", origin);
 
-    return callback(
-      new Error("Not allowed by CORS")
-    );
+    return callback(new Error("Not allowed by CORS"));
   },
 
   methods: [
@@ -115,418 +102,301 @@ const corsOptions = {
     "PUT",
     "PATCH",
     "DELETE",
-    "OPTIONS"
+    "OPTIONS",
   ],
 
   allowedHeaders: [
     "Content-Type",
-    "Authorization"
+    "Authorization",
   ],
 
-  credentials: false
+  credentials: false,
 };
 
-// CORS must be before all routes
 app.use(cors(corsOptions));
 
-// ==================================
-// HOME ROUTE
-// ==================================
+// =====================================
+// HEALTH CHECK
+// =====================================
 
 app.get("/", (req, res) => {
   res.status(200).json({
-    message: "Amazon Render API is running successfully!"
+    message: "Amazon Render API is running successfully!",
   });
 });
 
-// ==================================
+// =====================================
 // STRIPE WEBHOOK
-// IMPORTANT: BEFORE express.json()
-// ==================================
+// IMPORTANT: This must come before express.json()
+// =====================================
 
 app.post(
   "/stripe-webhook",
   express.raw({ type: "application/json" }),
   async (req, res) => {
-    const signature =
-      req.headers["stripe-signature"];
+    const signature = req.headers["stripe-signature"];
 
     let event;
 
     try {
-      if (!signature) {
-        return res.status(400).send(
-          "Missing Stripe signature"
-        );
-      }
-
       event = stripe.webhooks.constructEvent(
         req.body,
         signature,
         STRIPE_WEBHOOK_SECRET
       );
-
     } catch (error) {
-      console.error(
-        "Webhook signature error:",
-        error.message
-      );
+      console.error("Webhook signature error:", error.message);
 
       return res.status(400).send(
-        "Invalid webhook signature"
+        `Webhook Error: ${error.message}`
       );
     }
 
     try {
       if (
         event.type === "checkout.session.completed" ||
-        event.type ===
-          "checkout.session.async_payment_succeeded"
+        event.type === "checkout.session.async_payment_succeeded"
       ) {
         const session = event.data.object;
 
-        if (session.payment_status !== "paid") {
-          return res.status(200).json({
-            received: true,
-            message: "Payment is not paid yet"
-          });
-        }
+        if (session.payment_status === "paid") {
+          const userId = session.metadata?.userId;
 
-        const userId =
-          session.metadata?.userId || null;
+          if (!userId) {
+            console.error("Webhook missing userId metadata");
+            return res.status(200).json({ received: true });
+          }
 
-        const orderRef = db
-          .collection("orders")
-          .doc(session.id);
+          const orderRef = db
+            .collection("orders")
+            .doc(session.id);
 
-        const existingSnapshot = await orderRef.get();
+          const orderSnapshot = await orderRef.get();
 
-        const existingData = existingSnapshot.exists
-          ? existingSnapshot.data()
-          : {};
+          if (!orderSnapshot.exists) {
+            console.error("Order not found:", session.id);
+            return res.status(200).json({ received: true });
+          }
 
-        const order = {
-          orderId: session.id,
+          const existingData = orderSnapshot.data();
 
-          userId,
+          const orderData = {
+            ...existingData,
+            paymentStatus: "paid",
+            paymentIntent: session.payment_intent || null,
+            amount: session.amount_total
+              ? session.amount_total / 100
+              : existingData.total,
+            currency: session.currency || "usd",
+            updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+          };
 
-          userEmail:
-            session.customer_details?.email ||
-            session.customer_email ||
-            existingData.userEmail ||
-            null,
+          await orderRef.set(orderData, { merge: true });
 
-          basket: existingData.basket || [],
-
-          total:
-            (session.amount_total || 0) / 100,
-
-          amount:
-            (session.amount_total || 0) / 100,
-
-          currency: session.currency || "usd",
-
-          paymentStatus: "paid",
-
-          paymentIntent:
-            typeof session.payment_intent === "string"
-              ? session.payment_intent
-              : session.payment_intent?.id || null,
-
-          createdAt:
-            existingData.createdAt ||
-            FieldValue.serverTimestamp(),
-
-          created:
-            existingData.created ||
-            FieldValue.serverTimestamp()
-        };
-
-        await orderRef.set(order, {
-          merge: true
-        });
-
-        if (userId) {
           await db
             .collection("users")
             .doc(userId)
             .collection("orders")
             .doc(session.id)
-            .set(order, {
-              merge: true
-            });
-        }
+            .set(orderData, { merge: true });
 
-        console.log(
-          "Order payment completed:",
-          session.id
-        );
+          console.log("Order marked as paid:", session.id);
+        }
       }
 
-      return res.status(200).json({
-        received: true
-      });
-
+      return res.status(200).json({ received: true });
     } catch (error) {
-      console.error(
-        "Webhook processing error:",
-        error
-      );
+      console.error("Webhook processing error:", error);
 
-      return res.status(500).send(
-        "Webhook processing failed"
-      );
+      return res.status(500).json({
+        error: "Webhook processing failed",
+      });
     }
   }
 );
 
-// ==================================
-// JSON BODY PARSER
-// ==================================
+// =====================================
+// JSON MIDDLEWARE
+// =====================================
 
 app.use(express.json());
 
-// ==================================
+// =====================================
 // CREATE CHECKOUT SESSION
-// ==================================
+// =====================================
 
-app.post(
-  "/create-checkout-session",
-  async (req, res) => {
-    try {
-      const {
-        basket,
-        userId,
-        userEmail,
-        checkoutKey
-      } = req.body;
+app.post("/create-checkout-session", async (req, res) => {
+  try {
+    const {
+      basket,
+      userId,
+      userEmail,
+      checkoutKey,
+    } = req.body;
 
-      // Validate user
-      if (!userId || !userEmail) {
-        return res.status(400).json({
-          error: "User information is required"
-        });
-      }
-
-      // Validate checkout key
-      if (
-        !checkoutKey ||
-        typeof checkoutKey !== "string" ||
-        !checkoutKey.trim()
-      ) {
-        return res.status(400).json({
-          error: "Checkout key is required"
-        });
-      }
-
-      // Validate basket
-      if (
-        !Array.isArray(basket) ||
-        basket.length === 0
-      ) {
-        return res.status(400).json({
-          error: "Your basket is empty"
-        });
-      }
-
-      // Prepare basket products
-      const orderBasket = basket.map((item) => {
-        const price = Number(item.price);
-        const amount = Number(item.amount) || 1;
-
-        if (
-          !item.id ||
-          !item.title ||
-          !Number.isFinite(price) ||
-          price <= 0 ||
-          !Number.isFinite(amount) ||
-          amount <= 0
-        ) {
-          throw new Error(
-            "Invalid product information in basket"
-          );
-        }
-
-        return {
-          id: String(item.id),
-          title: String(item.title),
-          price,
-          thumbnail: String(item.thumbnail || ""),
-          amount,
-          rating: Number(item.rating) || 0,
-          description: String(item.description || "")
-        };
-      });
-
-      // Calculate total
-      const total = orderBasket.reduce(
-        (sum, item) =>
-          sum + item.price * item.amount,
-        0
-      );
-
-      if (
-        !Number.isFinite(total) ||
-        total <= 0
-      ) {
-        return res.status(400).json({
-          error: "Invalid order total"
-        });
-      }
-
-      const amountInCents = Math.round(
-        total * 100
-      );
-
-      // Stripe idempotency key
-      const idempotencyKey =
-        `amazon_checkout_${userId}_${checkoutKey.trim()}`;
-
-      // ==================================
-      // CREATE STRIPE CHECKOUT SESSION
-      // ==================================
-
-      const session =
-        await stripe.checkout.sessions.create(
-          {
-            ui_mode: "elements",
-
-            mode: "payment",
-
-            customer_email: userEmail,
-
-            metadata: {
-              userId: String(userId),
-              checkoutKey: checkoutKey.trim()
-            },
-
-            line_items: [
-              {
-                price_data: {
-                  currency: "usd",
-
-                  product_data: {
-                    name: "Amazon Order"
-                  },
-
-                  unit_amount: amountInCents
-                },
-
-                quantity: 1
-              }
-            ],
-
-            return_url:
-              `${FRONTEND_URL}/Orders?session_id={CHECKOUT_SESSION_ID}`
-          },
-          {
-            idempotencyKey
-          }
-        );
-
-      // ==================================
-      // SAVE PENDING ORDER TO FIRESTORE
-      // ==================================
-
-      const orderRef = db
-        .collection("orders")
-        .doc(session.id);
-
-      const pendingOrder = {
-        orderId: session.id,
-
-        userId: String(userId),
-
-        userEmail,
-
-        basket: orderBasket,
-
-        total,
-
-        amount: total,
-
-        currency: "usd",
-
-        paymentStatus: "pending",
-
-        createdAt: FieldValue.serverTimestamp(),
-
-        created: FieldValue.serverTimestamp()
-      };
-
-      await db.runTransaction(
-        async (transaction) => {
-          const existing =
-            await transaction.get(orderRef);
-
-          if (!existing.exists) {
-            transaction.set(
-              orderRef,
-              pendingOrder
-            );
-          }
-        }
-      );
-
-      // Save order under user's account
-      const savedOrderSnapshot =
-        await orderRef.get();
-
-      const savedOrder =
-        savedOrderSnapshot.data();
-
-      if (savedOrder) {
-        await db
-          .collection("users")
-          .doc(String(userId))
-          .collection("orders")
-          .doc(session.id)
-          .set(savedOrder, {
-            merge: true
-          });
-      }
-
-      console.log(
-        "Checkout Session:",
-        session.id
-      );
-
-      console.log(
-        "Order saved:",
-        session.id
-      );
-
-      // Return client secret
-      return res.status(200).json({
-        clientSecret: session.client_secret,
-        sessionId: session.id
-      });
-
-    } catch (error) {
-      console.error(
-        "Stripe Checkout Error:",
-        error
-      );
-
-      return res.status(500).json({
-        error:
-          error.message ||
-          "Unable to create checkout session"
+    // Validate request
+    if (!userId) {
+      return res.status(400).json({
+        error: "User ID is required",
       });
     }
-  }
-);
 
-// ==================================
-// SERVER START
-// ==================================
+    if (!checkoutKey) {
+      return res.status(400).json({
+        error: "Checkout key is required",
+      });
+    }
+
+    if (!Array.isArray(basket) || basket.length === 0) {
+      return res.status(400).json({
+        error: "Basket is empty",
+      });
+    }
+
+    // Validate and prepare basket
+    const cleanBasket = basket.map((item) => {
+      const price = Number(item.price);
+      const amount = Number(item.amount || 1);
+
+      if (
+        !Number.isFinite(price) ||
+        price <= 0 ||
+        !Number.isInteger(amount) ||
+        amount <= 0
+      ) {
+        throw new Error("Invalid product price or quantity");
+      }
+
+      return {
+        id: item.id || "",
+        title: item.title || "Amazon Product",
+        price,
+        thumbnail: item.thumbnail || "",
+        amount,
+        rating: item.rating || 0,
+        description: item.description || "",
+      };
+    });
+
+    // Calculate total
+    const total = cleanBasket.reduce(
+      (sum, item) => sum + item.price * item.amount,
+      0
+    );
+
+    const amountInCents = Math.round(total * 100);
+
+    if (amountInCents < 50) {
+      return res.status(400).json({
+        error: "Payment amount is too small",
+      });
+    }
+
+    // Create Stripe Checkout Session
+    const idempotencyKey =
+      `amazon_checkout_${userId}_${checkoutKey.trim()}`;
+
+    const session = await stripe.checkout.sessions.create(
+      {
+        ui_mode: "elements",
+        mode: "payment",
+
+        customer_email: userEmail || undefined,
+
+        metadata: {
+          userId,
+          checkoutKey: checkoutKey.trim(),
+        },
+
+        line_items: [
+          {
+            price_data: {
+              currency: "usd",
+
+              product_data: {
+                name: "Amazon Order",
+              },
+
+              unit_amount: amountInCents,
+            },
+
+            quantity: 1,
+          },
+        ],
+
+        return_url:
+          `${FRONTEND_URL}/Orders?session_id={CHECKOUT_SESSION_ID}`,
+      },
+      {
+        idempotencyKey,
+      }
+    );
+
+    // Save pending order to Firestore
+    const orderData = {
+      userId,
+      basket: cleanBasket,
+      total,
+      currency: "usd",
+      paymentStatus: "pending",
+      sessionId: session.id,
+      paymentIntent: null,
+      createdAt: admin.firestore.FieldValue.serverTimestamp(),
+      updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+    };
+
+    const orderRef = db
+      .collection("orders")
+      .doc(session.id);
+
+    await orderRef.set(orderData);
+
+    await db
+      .collection("users")
+      .doc(userId)
+      .collection("orders")
+      .doc(session.id)
+      .set(orderData);
+
+    console.log("Checkout session created:", session.id);
+
+    return res.status(200).json({
+      clientSecret: session.client_secret,
+      sessionId: session.id,
+    });
+
+  } catch (error) {
+    console.error("Checkout session error:", error);
+
+    return res.status(500).json({
+      error: error.message || "Unable to create checkout session",
+    });
+  }
+});
+
+// =====================================
+// ERROR HANDLER
+// =====================================
+
+app.use((error, req, res, next) => {
+  console.error("Server error:", error.message);
+
+  if (error.message === "Not allowed by CORS") {
+    return res.status(403).json({
+      error: "Origin not allowed by CORS",
+    });
+  }
+
+  return res.status(500).json({
+    error: "Internal server error",
+  });
+});
+
+// =====================================
+// START SERVER
+// =====================================
 
 app.listen(PORT, "0.0.0.0", () => {
-  console.log(
-    `Amazon API running on port ${PORT}`
-  );
-
-  console.log(
-    `Frontend URL: ${FRONTEND_URL}`
-  );
+  console.log(`Amazon API running on port ${PORT}`);
+  console.log("Allowed frontend:", allowedOrigins);
 });
