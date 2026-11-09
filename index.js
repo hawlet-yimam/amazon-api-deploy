@@ -14,31 +14,32 @@ dotenv.config();
 // ==================================
 
 const PORT = process.env.PORT || 5000;
+
 const STRIPE_KEY = process.env.STRIPE_KEY;
-const STRIPE_WEBHOOK_SECRET = process.env.STRIPE_WEBHOOK_SECRET;
+const STRIPE_WEBHOOK_SECRET =
+  process.env.STRIPE_WEBHOOK_SECRET;
 
 const FRONTEND_URL = (
-  process.env.FRONTEND_URL || "http://localhost:5173"
+  process.env.FRONTEND_URL ||
+  "https://app-rgah.vercel.app"
 ).replace(/\/+$/, "");
 
 if (!STRIPE_KEY) {
-  throw new Error("STRIPE_KEY is missing from environment variables");
+  throw new Error("STRIPE_KEY is missing");
 }
 
 if (!STRIPE_WEBHOOK_SECRET) {
-  throw new Error(
-    "STRIPE_WEBHOOK_SECRET is missing from environment variables"
-  );
+  throw new Error("STRIPE_WEBHOOK_SECRET is missing");
 }
 
 // ==================================
-// STRIPE
+// STRIPE INITIALIZATION
 // ==================================
 
 const stripe = stripePackage(STRIPE_KEY);
 
 // ==================================
-// FIREBASE ADMIN
+// FIREBASE ADMIN INITIALIZATION
 // ==================================
 
 const serviceAccountPath = path.join(
@@ -58,10 +59,15 @@ try {
       fs.readFileSync(serviceAccountPath, "utf8")
     );
   } else {
-    throw new Error("Firebase service account credentials not found");
+    throw new Error(
+      "Firebase service account credentials not found"
+    );
   }
 } catch (error) {
-  console.error("Firebase credentials error:", error.message);
+  console.error(
+    "Firebase credentials error:",
+    error.message
+  );
   throw error;
 }
 
@@ -80,22 +86,48 @@ const FieldValue = admin.firestore.FieldValue;
 
 const app = express();
 
+// ==================================
+// CORS CONFIGURATION
+// ==================================
+
 const allowedOrigins = [
   "http://localhost:5173",
+  "https://app-rgah.vercel.app",
   FRONTEND_URL
 ].filter(Boolean);
 
-app.use(
-  cors({
-    origin: function (origin, callback) {
-      if (!origin || allowedOrigins.includes(origin)) {
-        return callback(null, true);
-      }
-
-      return callback(new Error("Not allowed by CORS"));
+const corsOptions = {
+  origin: function (origin, callback) {
+    if (!origin || allowedOrigins.includes(origin)) {
+      return callback(null, true);
     }
-  })
-);
+
+    console.error("Blocked by CORS:", origin);
+
+    return callback(
+      new Error("Not allowed by CORS")
+    );
+  },
+
+  methods: [
+    "GET",
+    "POST",
+    "PUT",
+    "PATCH",
+    "DELETE",
+    "OPTIONS"
+  ],
+
+  allowedHeaders: [
+    "Content-Type",
+    "Authorization"
+  ],
+
+  credentials: false
+};
+
+// CORS must be before all routes
+app.use(cors(corsOptions));
 
 // ==================================
 // HOME ROUTE
@@ -109,20 +141,23 @@ app.get("/", (req, res) => {
 
 // ==================================
 // STRIPE WEBHOOK
-// IMPORTANT: MUST BE BEFORE express.json()
+// IMPORTANT: BEFORE express.json()
 // ==================================
 
 app.post(
   "/stripe-webhook",
   express.raw({ type: "application/json" }),
   async (req, res) => {
-    const signature = req.headers["stripe-signature"];
+    const signature =
+      req.headers["stripe-signature"];
 
     let event;
 
     try {
       if (!signature) {
-        return res.status(400).send("Missing Stripe signature");
+        return res.status(400).send(
+          "Missing Stripe signature"
+        );
       }
 
       event = stripe.webhooks.constructEvent(
@@ -130,15 +165,23 @@ app.post(
         signature,
         STRIPE_WEBHOOK_SECRET
       );
+
     } catch (error) {
-      console.error("Webhook signature error:", error.message);
-      return res.status(400).send("Invalid webhook signature");
+      console.error(
+        "Webhook signature error:",
+        error.message
+      );
+
+      return res.status(400).send(
+        "Invalid webhook signature"
+      );
     }
 
     try {
       if (
         event.type === "checkout.session.completed" ||
-        event.type === "checkout.session.async_payment_succeeded"
+        event.type ===
+          "checkout.session.async_payment_succeeded"
       ) {
         const session = event.data.object;
 
@@ -149,7 +192,8 @@ app.post(
           });
         }
 
-        const userId = session.metadata?.userId || null;
+        const userId =
+          session.metadata?.userId || null;
 
         const orderRef = db
           .collection("orders")
@@ -163,6 +207,7 @@ app.post(
 
         const order = {
           orderId: session.id,
+
           userId,
 
           userEmail:
@@ -173,10 +218,14 @@ app.post(
 
           basket: existingData.basket || [],
 
-          total: (session.amount_total || 0) / 100,
-          amount: (session.amount_total || 0) / 100,
+          total:
+            (session.amount_total || 0) / 100,
+
+          amount:
+            (session.amount_total || 0) / 100,
 
           currency: session.currency || "usd",
+
           paymentStatus: "paid",
 
           paymentIntent:
@@ -193,7 +242,9 @@ app.post(
             FieldValue.serverTimestamp()
         };
 
-        await orderRef.set(order, { merge: true });
+        await orderRef.set(order, {
+          merge: true
+        });
 
         if (userId) {
           await db
@@ -201,10 +252,15 @@ app.post(
             .doc(userId)
             .collection("orders")
             .doc(session.id)
-            .set(order, { merge: true });
+            .set(order, {
+              merge: true
+            });
         }
 
-        console.log("Order payment completed:", session.id);
+        console.log(
+          "Order payment completed:",
+          session.id
+        );
       }
 
       return res.status(200).json({
@@ -212,9 +268,14 @@ app.post(
       });
 
     } catch (error) {
-      console.error("Webhook processing error:", error);
+      console.error(
+        "Webhook processing error:",
+        error
+      );
 
-      return res.status(500).send("Webhook processing failed");
+      return res.status(500).send(
+        "Webhook processing failed"
+      );
     }
   }
 );
@@ -229,192 +290,243 @@ app.use(express.json());
 // CREATE CHECKOUT SESSION
 // ==================================
 
-app.post("/create-checkout-session", async (req, res) => {
-  try {
-    const {
-      basket,
-      userId,
-      userEmail,
-      checkoutKey
-    } = req.body;
+app.post(
+  "/create-checkout-session",
+  async (req, res) => {
+    try {
+      const {
+        basket,
+        userId,
+        userEmail,
+        checkoutKey
+      } = req.body;
 
-    // Validate user
-    if (!userId || !userEmail) {
-      return res.status(400).json({
-        error: "User information is required"
+      // Validate user
+      if (!userId || !userEmail) {
+        return res.status(400).json({
+          error: "User information is required"
+        });
+      }
+
+      // Validate checkout key
+      if (
+        !checkoutKey ||
+        typeof checkoutKey !== "string" ||
+        !checkoutKey.trim()
+      ) {
+        return res.status(400).json({
+          error: "Checkout key is required"
+        });
+      }
+
+      // Validate basket
+      if (
+        !Array.isArray(basket) ||
+        basket.length === 0
+      ) {
+        return res.status(400).json({
+          error: "Your basket is empty"
+        });
+      }
+
+      // Prepare basket products
+      const orderBasket = basket.map((item) => {
+        const price = Number(item.price);
+        const amount = Number(item.amount) || 1;
+
+        if (
+          !item.id ||
+          !item.title ||
+          !Number.isFinite(price) ||
+          price <= 0 ||
+          !Number.isFinite(amount) ||
+          amount <= 0
+        ) {
+          throw new Error(
+            "Invalid product information in basket"
+          );
+        }
+
+        return {
+          id: String(item.id),
+          title: String(item.title),
+          price,
+          thumbnail: String(item.thumbnail || ""),
+          amount,
+          rating: Number(item.rating) || 0,
+          description: String(item.description || "")
+        };
       });
-    }
 
-    // Validate checkout key
-    if (
-      !checkoutKey ||
-      typeof checkoutKey !== "string" ||
-      !checkoutKey.trim()
-    ) {
-      return res.status(400).json({
-        error: "Checkout key is required"
-      });
-    }
-
-    // Validate basket
-    if (!Array.isArray(basket) || basket.length === 0) {
-      return res.status(400).json({
-        error: "Your basket is empty"
-      });
-    }
-
-    // Prepare basket products
-    const orderBasket = basket.map((item) => {
-      const price = Number(item.price);
-      const amount = Number(item.amount) || 1;
+      // Calculate total
+      const total = orderBasket.reduce(
+        (sum, item) =>
+          sum + item.price * item.amount,
+        0
+      );
 
       if (
-        !item.id ||
-        !item.title ||
-        !Number.isFinite(price) ||
-        price <= 0 ||
-        !Number.isFinite(amount) ||
-        amount <= 0
+        !Number.isFinite(total) ||
+        total <= 0
       ) {
-        throw new Error("Invalid product information in basket");
+        return res.status(400).json({
+          error: "Invalid order total"
+        });
       }
 
-      return {
-        id: String(item.id),
-        title: String(item.title),
-        price,
-        thumbnail: String(item.thumbnail || ""),
-        amount,
-        rating: Number(item.rating) || 0,
-        description: String(item.description || "")
-      };
-    });
+      const amountInCents = Math.round(
+        total * 100
+      );
 
-    // Calculate total
-    const total = orderBasket.reduce(
-      (sum, item) => sum + item.price * item.amount,
-      0
-    );
+      // Stripe idempotency key
+      const idempotencyKey =
+        `amazon_checkout_${userId}_${checkoutKey.trim()}`;
 
-    if (!Number.isFinite(total) || total <= 0) {
-      return res.status(400).json({
-        error: "Invalid order total"
-      });
-    }
+      // ==================================
+      // CREATE STRIPE CHECKOUT SESSION
+      // ==================================
 
-    const amountInCents = Math.round(total * 100);
-
-    // Stripe idempotency key
-    const idempotencyKey =
-      `amazon_checkout_${userId}_${checkoutKey.trim()}`;
-
-    // Create Stripe Checkout Session
-    const session = await stripe.checkout.sessions.create(
-      {
-        ui_mode: "elements",
-        mode: "payment",
-
-        // Email is set here.
-        // Do not also pass email in Stripe confirm().
-
-        customer_email: userEmail,
-
-        metadata: {
-          userId: String(userId),
-          checkoutKey: checkoutKey.trim()
-        },
-
-        line_items: [
+      const session =
+        await stripe.checkout.sessions.create(
           {
-            price_data: {
-              currency: "usd",
+            ui_mode: "elements",
 
-              product_data: {
-                name: "Amazon Order"
-              },
+            mode: "payment",
 
-              unit_amount: amountInCents
+            customer_email: userEmail,
+
+            metadata: {
+              userId: String(userId),
+              checkoutKey: checkoutKey.trim()
             },
 
-            quantity: 1
+            line_items: [
+              {
+                price_data: {
+                  currency: "usd",
+
+                  product_data: {
+                    name: "Amazon Order"
+                  },
+
+                  unit_amount: amountInCents
+                },
+
+                quantity: 1
+              }
+            ],
+
+            return_url:
+              `${FRONTEND_URL}/Orders?session_id={CHECKOUT_SESSION_ID}`
+          },
+          {
+            idempotencyKey
           }
-        ],
+        );
 
-        return_url:
-          `${FRONTEND_URL}/Orders?session_id={CHECKOUT_SESSION_ID}`
-      },
-      {
-        idempotencyKey
-      }
-    );
+      // ==================================
+      // SAVE PENDING ORDER TO FIRESTORE
+      // ==================================
 
-    // ==================================
-    // SAVE PENDING ORDER TO FIRESTORE
-    // ==================================
-
-    const orderRef = db
-      .collection("orders")
-      .doc(session.id);
-
-    const pendingOrder = {
-      orderId: session.id,
-      userId: String(userId),
-      userEmail,
-
-      basket: orderBasket,
-
-      total,
-      amount: total,
-
-      currency: "usd",
-      paymentStatus: "pending",
-
-      createdAt: FieldValue.serverTimestamp(),
-      created: FieldValue.serverTimestamp()
-    };
-
-    await db.runTransaction(async (transaction) => {
-      const existing = await transaction.get(orderRef);
-
-      if (!existing.exists) {
-        transaction.set(orderRef, pendingOrder);
-      }
-    });
-
-    // Save order under user's account
-    const savedOrderSnapshot = await orderRef.get();
-    const savedOrder = savedOrderSnapshot.data();
-
-    if (savedOrder) {
-      await db
-        .collection("users")
-        .doc(String(userId))
+      const orderRef = db
         .collection("orders")
-        .doc(session.id)
-        .set(savedOrder, { merge: true });
+        .doc(session.id);
+
+      const pendingOrder = {
+        orderId: session.id,
+
+        userId: String(userId),
+
+        userEmail,
+
+        basket: orderBasket,
+
+        total,
+
+        amount: total,
+
+        currency: "usd",
+
+        paymentStatus: "pending",
+
+        createdAt: FieldValue.serverTimestamp(),
+
+        created: FieldValue.serverTimestamp()
+      };
+
+      await db.runTransaction(
+        async (transaction) => {
+          const existing =
+            await transaction.get(orderRef);
+
+          if (!existing.exists) {
+            transaction.set(
+              orderRef,
+              pendingOrder
+            );
+          }
+        }
+      );
+
+      // Save order under user's account
+      const savedOrderSnapshot =
+        await orderRef.get();
+
+      const savedOrder =
+        savedOrderSnapshot.data();
+
+      if (savedOrder) {
+        await db
+          .collection("users")
+          .doc(String(userId))
+          .collection("orders")
+          .doc(session.id)
+          .set(savedOrder, {
+            merge: true
+          });
+      }
+
+      console.log(
+        "Checkout Session:",
+        session.id
+      );
+
+      console.log(
+        "Order saved:",
+        session.id
+      );
+
+      // Return client secret
+      return res.status(200).json({
+        clientSecret: session.client_secret,
+        sessionId: session.id
+      });
+
+    } catch (error) {
+      console.error(
+        "Stripe Checkout Error:",
+        error
+      );
+
+      return res.status(500).json({
+        error:
+          error.message ||
+          "Unable to create checkout session"
+      });
     }
-
-    console.log("Checkout Session:", session.id);
-    console.log("Order saved:", session.id);
-
-    return res.status(200).json({
-      clientSecret: session.client_secret,
-      sessionId: session.id
-    });
-
-  } catch (error) {
-    console.error("Stripe Checkout Error:", error);
-
-    return res.status(500).json({
-      error: error.message || "Unable to create checkout session"
-    });
   }
-});
+);
 
 // ==================================
-// START SERVER
+// SERVER START
 // ==================================
 
 app.listen(PORT, "0.0.0.0", () => {
-  console.log(`Amazon API running on port ${PORT}`);
+  console.log(
+    `Amazon API running on port ${PORT}`
+  );
+
+  console.log(
+    `Frontend URL: ${FRONTEND_URL}`
+  );
 });
