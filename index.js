@@ -9,13 +9,16 @@ const path = require("path");
 
 dotenv.config();
 
-// =====================================
-// ENVIRONMENT VARIABLES
-// =====================================
+// ==========================================
+// 1. ENVIRONMENT VARIABLES
+// ==========================================
 
 const PORT = process.env.PORT || 5000;
+
 const STRIPE_KEY = process.env.STRIPE_KEY;
-const STRIPE_WEBHOOK_SECRET = process.env.STRIPE_WEBHOOK_SECRET;
+
+const STRIPE_WEBHOOK_SECRET =
+  process.env.STRIPE_WEBHOOK_SECRET;
 
 const FRONTEND_URL = (
   process.env.FRONTEND_URL ||
@@ -23,22 +26,22 @@ const FRONTEND_URL = (
 ).replace(/\/+$/, "");
 
 if (!STRIPE_KEY) {
-  throw new Error("STRIPE_KEY is missing from environment variables");
+  throw new Error("STRIPE_KEY is missing!");
 }
 
 if (!STRIPE_WEBHOOK_SECRET) {
-  throw new Error("STRIPE_WEBHOOK_SECRET is missing from environment variables");
+  throw new Error("STRIPE_WEBHOOK_SECRET is missing!");
 }
 
-// =====================================
-// STRIPE INITIALIZATION
-// =====================================
+// ==========================================
+// 2. STRIPE INITIALIZATION
+// ==========================================
 
 const stripe = stripePackage(STRIPE_KEY);
 
-// =====================================
-// FIREBASE ADMIN INITIALIZATION
-// =====================================
+// ==========================================
+// 3. FIREBASE ADMIN INITIALIZATION
+// ==========================================
 
 let serviceAccount;
 
@@ -54,7 +57,7 @@ if (process.env.FIREBASE_SERVICE_ACCOUNT_JSON) {
 
   if (!fs.existsSync(serviceAccountPath)) {
     throw new Error(
-      "Firebase service account is missing. Set FIREBASE_SERVICE_ACCOUNT_JSON."
+      "Firebase service account file is missing!"
     );
   }
 
@@ -69,21 +72,28 @@ if (!admin.apps.length) {
 
 const db = admin.firestore();
 
-// =====================================
-// EXPRESS APP
-// =====================================
+// ==========================================
+// 4. EXPRESS APP
+// ==========================================
 
 const app = express();
 
-// =====================================
-// CORS CONFIGURATION
-// =====================================
+// ==========================================
+// 5. CORS CONFIGURATION
+// ==========================================
 
 const allowedOrigins = [
   "http://localhost:5173",
+
+  // Main Vercel domain
   "https://amazon-clone-rho-umber.vercel.app",
+
+  // Current Vercel deployment domain
+  "https://amazon-71o06spta-yhawelet-3567s-projects.vercel.app",
+
+  // Render environment variable
   FRONTEND_URL,
-];
+].filter(Boolean);
 
 const corsOptions = {
   origin: function (origin, callback) {
@@ -113,22 +123,23 @@ const corsOptions = {
   credentials: false,
 };
 
+// CORS must come before all API routes
 app.use(cors(corsOptions));
 
-// =====================================
-// HEALTH CHECK
-// =====================================
+// ==========================================
+// 6. HEALTH CHECK
+// ==========================================
 
 app.get("/", (req, res) => {
-  res.status(200).json({
+  return res.status(200).json({
     message: "Amazon Render API is running successfully!",
   });
 });
 
-// =====================================
-// STRIPE WEBHOOK
-// IMPORTANT: This must come before express.json()
-// =====================================
+// ==========================================
+// 7. STRIPE WEBHOOK
+// IMPORTANT: Before express.json()
+// ==========================================
 
 app.post(
   "/stripe-webhook",
@@ -145,7 +156,10 @@ app.post(
         STRIPE_WEBHOOK_SECRET
       );
     } catch (error) {
-      console.error("Webhook signature error:", error.message);
+      console.error(
+        "Webhook signature error:",
+        error.message
+      );
 
       return res.status(400).send(
         `Webhook Error: ${error.message}`
@@ -163,8 +177,11 @@ app.post(
           const userId = session.metadata?.userId;
 
           if (!userId) {
-            console.error("Webhook missing userId metadata");
-            return res.status(200).json({ received: true });
+            console.error("Webhook userId is missing");
+
+            return res.status(200).json({
+              received: true,
+            });
           }
 
           const orderRef = db
@@ -174,39 +191,67 @@ app.post(
           const orderSnapshot = await orderRef.get();
 
           if (!orderSnapshot.exists) {
-            console.error("Order not found:", session.id);
-            return res.status(200).json({ received: true });
+            console.error(
+              "Order not found:",
+              session.id
+            );
+
+            return res.status(200).json({
+              received: true,
+            });
           }
 
           const existingData = orderSnapshot.data();
 
           const orderData = {
             ...existingData,
+
             paymentStatus: "paid",
-            paymentIntent: session.payment_intent || null,
+
+            paymentIntent:
+              session.payment_intent || null,
+
             amount: session.amount_total
               ? session.amount_total / 100
               : existingData.total,
+
             currency: session.currency || "usd",
-            updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+
+            updatedAt:
+              admin.firestore.FieldValue.serverTimestamp(),
           };
 
-          await orderRef.set(orderData, { merge: true });
+          // Update main orders collection
+          await orderRef.set(orderData, {
+            merge: true,
+          });
 
+          // Update user's orders collection
           await db
             .collection("users")
             .doc(userId)
             .collection("orders")
             .doc(session.id)
-            .set(orderData, { merge: true });
+            .set(orderData, {
+              merge: true,
+            });
 
-          console.log("Order marked as paid:", session.id);
+          console.log(
+            "Order marked as paid:",
+            session.id
+          );
         }
       }
 
-      return res.status(200).json({ received: true });
+      return res.status(200).json({
+        received: true,
+      });
+
     } catch (error) {
-      console.error("Webhook processing error:", error);
+      console.error(
+        "Webhook processing error:",
+        error
+      );
 
       return res.status(500).json({
         error: "Webhook processing failed",
@@ -215,168 +260,211 @@ app.post(
   }
 );
 
-// =====================================
-// JSON MIDDLEWARE
-// =====================================
+// ==========================================
+// 8. JSON MIDDLEWARE
+// ==========================================
 
 app.use(express.json());
 
-// =====================================
-// CREATE CHECKOUT SESSION
-// =====================================
+// ==========================================
+// 9. CREATE CHECKOUT SESSION
+// ==========================================
 
-app.post("/create-checkout-session", async (req, res) => {
-  try {
-    const {
-      basket,
-      userId,
-      userEmail,
-      checkoutKey,
-    } = req.body;
+app.post(
+  "/create-checkout-session",
+  async (req, res) => {
+    try {
+      const {
+        basket,
+        userId,
+        userEmail,
+        checkoutKey,
+      } = req.body;
 
-    // Validate request
-    if (!userId) {
-      return res.status(400).json({
-        error: "User ID is required",
-      });
-    }
-
-    if (!checkoutKey) {
-      return res.status(400).json({
-        error: "Checkout key is required",
-      });
-    }
-
-    if (!Array.isArray(basket) || basket.length === 0) {
-      return res.status(400).json({
-        error: "Basket is empty",
-      });
-    }
-
-    // Validate and prepare basket
-    const cleanBasket = basket.map((item) => {
-      const price = Number(item.price);
-      const amount = Number(item.amount || 1);
-
-      if (
-        !Number.isFinite(price) ||
-        price <= 0 ||
-        !Number.isInteger(amount) ||
-        amount <= 0
-      ) {
-        throw new Error("Invalid product price or quantity");
+      // Validate user
+      if (!userId) {
+        return res.status(400).json({
+          error: "User ID is required",
+        });
       }
 
-      return {
-        id: item.id || "",
-        title: item.title || "Amazon Product",
-        price,
-        thumbnail: item.thumbnail || "",
-        amount,
-        rating: item.rating || 0,
-        description: item.description || "",
-      };
-    });
+      // Validate checkout key
+      if (
+        !checkoutKey ||
+        typeof checkoutKey !== "string"
+      ) {
+        return res.status(400).json({
+          error: "Checkout key is required",
+        });
+      }
 
-    // Calculate total
-    const total = cleanBasket.reduce(
-      (sum, item) => sum + item.price * item.amount,
-      0
-    );
+      // Validate basket
+      if (
+        !Array.isArray(basket) ||
+        basket.length === 0
+      ) {
+        return res.status(400).json({
+          error: "Your basket is empty",
+        });
+      }
 
-    const amountInCents = Math.round(total * 100);
+      // Clean basket data
+      const cleanBasket = basket.map((item) => {
+        const price = Number(item.price);
 
-    if (amountInCents < 50) {
-      return res.status(400).json({
-        error: "Payment amount is too small",
+        const amount = Number(item.amount || 1);
+
+        if (
+          !Number.isFinite(price) ||
+          price <= 0 ||
+          !Number.isInteger(amount) ||
+          amount <= 0
+        ) {
+          throw new Error(
+            "Invalid product price or quantity"
+          );
+        }
+
+        return {
+          id: item.id || "",
+          title: item.title || "Amazon Product",
+          price,
+          thumbnail: item.thumbnail || "",
+          amount,
+          rating: item.rating || 0,
+          description: item.description || "",
+        };
       });
-    }
 
-    // Create Stripe Checkout Session
-    const idempotencyKey =
-      `amazon_checkout_${userId}_${checkoutKey.trim()}`;
+      // Calculate total
+      const total = cleanBasket.reduce(
+        (sum, item) =>
+          sum + item.price * item.amount,
+        0
+      );
 
-    const session = await stripe.checkout.sessions.create(
-      {
-        ui_mode: "elements",
-        mode: "payment",
+      const amountInCents = Math.round(total * 100);
 
-        customer_email: userEmail || undefined,
+      if (amountInCents < 50) {
+        return res.status(400).json({
+          error: "Payment amount is too small",
+        });
+      }
 
-        metadata: {
-          userId,
-          checkoutKey: checkoutKey.trim(),
-        },
+      // ==================================
+      // STRIPE CHECKOUT SESSION
+      // ==================================
 
-        line_items: [
+      const idempotencyKey =
+        `amazon_checkout_${userId}_${checkoutKey.trim()}`;
+
+      const session =
+        await stripe.checkout.sessions.create(
           {
-            price_data: {
-              currency: "usd",
+            ui_mode: "elements",
 
-              product_data: {
-                name: "Amazon Order",
-              },
+            mode: "payment",
 
-              unit_amount: amountInCents,
+            customer_email: userEmail || undefined,
+
+            metadata: {
+              userId,
+              checkoutKey: checkoutKey.trim(),
             },
 
-            quantity: 1,
+            line_items: [
+              {
+                price_data: {
+                  currency: "usd",
+
+                  product_data: {
+                    name: "Amazon Order",
+                  },
+
+                  unit_amount: amountInCents,
+                },
+
+                quantity: 1,
+              },
+            ],
+
+            return_url:
+              `${FRONTEND_URL}/Orders?session_id={CHECKOUT_SESSION_ID}`,
           },
-        ],
+          {
+            idempotencyKey,
+          }
+        );
 
-        return_url:
-          `${FRONTEND_URL}/Orders?session_id={CHECKOUT_SESSION_ID}`,
-      },
-      {
-        idempotencyKey,
-      }
-    );
+      // ==================================
+      // SAVE PENDING ORDER
+      // ==================================
 
-    // Save pending order to Firestore
-    const orderData = {
-      userId,
-      basket: cleanBasket,
-      total,
-      currency: "usd",
-      paymentStatus: "pending",
-      sessionId: session.id,
-      paymentIntent: null,
-      createdAt: admin.firestore.FieldValue.serverTimestamp(),
-      updatedAt: admin.firestore.FieldValue.serverTimestamp(),
-    };
+      const orderData = {
+        userId,
 
-    const orderRef = db
-      .collection("orders")
-      .doc(session.id);
+        basket: cleanBasket,
 
-    await orderRef.set(orderData);
+        total,
 
-    await db
-      .collection("users")
-      .doc(userId)
-      .collection("orders")
-      .doc(session.id)
-      .set(orderData);
+        currency: "usd",
 
-    console.log("Checkout session created:", session.id);
+        paymentStatus: "pending",
 
-    return res.status(200).json({
-      clientSecret: session.client_secret,
-      sessionId: session.id,
-    });
+        sessionId: session.id,
 
-  } catch (error) {
-    console.error("Checkout session error:", error);
+        paymentIntent: null,
 
-    return res.status(500).json({
-      error: error.message || "Unable to create checkout session",
-    });
+        createdAt:
+          admin.firestore.FieldValue.serverTimestamp(),
+
+        updatedAt:
+          admin.firestore.FieldValue.serverTimestamp(),
+      };
+
+      const orderRef = db
+        .collection("orders")
+        .doc(session.id);
+
+      await orderRef.set(orderData);
+
+      // Save under user account
+      await db
+        .collection("users")
+        .doc(userId)
+        .collection("orders")
+        .doc(session.id)
+        .set(orderData);
+
+      console.log(
+        "Checkout session created:",
+        session.id
+      );
+
+      return res.status(200).json({
+        clientSecret: session.client_secret,
+
+        sessionId: session.id,
+      });
+
+    } catch (error) {
+      console.error(
+        "Checkout session error:",
+        error
+      );
+
+      return res.status(500).json({
+        error:
+          error.message ||
+          "Unable to create checkout session",
+      });
+    }
   }
-});
+);
 
-// =====================================
-// ERROR HANDLER
-// =====================================
+// ==========================================
+// 10. ERROR HANDLER
+// ==========================================
 
 app.use((error, req, res, next) => {
   console.error("Server error:", error.message);
@@ -392,11 +480,17 @@ app.use((error, req, res, next) => {
   });
 });
 
-// =====================================
-// START SERVER
-// =====================================
+// ==========================================
+// 11. START SERVER
+// ==========================================
 
 app.listen(PORT, "0.0.0.0", () => {
-  console.log(`Amazon API running on port ${PORT}`);
-  console.log("Allowed frontend:", allowedOrigins);
+  console.log(
+    `Amazon API running on port ${PORT}`
+  );
+
+  console.log(
+    "Allowed frontend:",
+    allowedOrigins
+  );
 });
