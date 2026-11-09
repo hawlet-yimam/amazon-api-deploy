@@ -1,0 +1,23 @@
+{
+  "name": "amazon-api",
+  "version": "1.0.0",
+  "description": "Amazon clone backend API",
+  "main": "index.js",
+  "scripts": {
+    "start": "node index.js"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "commonjs",
+  "engines": {
+    "node": "22.x"
+  },
+  "dependencies": {
+    "cors": "^2.8.6",
+    "dotenv": "^18.0.9",
+    "express": "^5.3.0",
+    "firebase-admin": "^13.10.0",
+    "stripe": "^23.1.0"
+  }
+}

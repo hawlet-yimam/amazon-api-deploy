@@ -1,0 +1,9 @@
+# .env
+# node_modules
+# serviceAccountKey.json
+node_modules/
+.env
+.env.*
+!.env.example
+serviceAccountKey.json
+*serviceAccount*.json
