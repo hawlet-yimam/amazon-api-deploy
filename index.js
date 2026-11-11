@@ -16,13 +16,11 @@ dotenv.config();
 const PORT = process.env.PORT || 5000;
 
 const STRIPE_KEY = process.env.STRIPE_KEY;
-
-const STRIPE_WEBHOOK_SECRET =
-  process.env.STRIPE_WEBHOOK_SECRET;
+const STRIPE_WEBHOOK_SECRET = process.env.STRIPE_WEBHOOK_SECRET;
 
 const FRONTEND_URL = (
   process.env.FRONTEND_URL ||
-  "https://amazon-clone-rho-umber.vercel.app"
+  "https://amazon-mfvz.vercel.app"
 ).replace(/\/+$/, "");
 
 if (!STRIPE_KEY) {
@@ -85,13 +83,12 @@ const app = express();
 const allowedOrigins = [
   "http://localhost:5173",
 
-  // Main Vercel domain
   "https://amazon-clone-rho-umber.vercel.app",
 
-  // Current Vercel deployment domain
   "https://amazon-71o06spta-yhawelet-3567s-projects.vercel.app",
 
-  // Render environment variable
+  "https://amazon-mfvz.vercel.app",
+
   FRONTEND_URL,
 ].filter(Boolean);
 
@@ -123,7 +120,7 @@ const corsOptions = {
   credentials: false,
 };
 
-// CORS must come before all API routes
+// CORS must come before API routes
 app.use(cors(corsOptions));
 
 // ==========================================
@@ -205,18 +202,12 @@ app.post(
 
           const orderData = {
             ...existingData,
-
             paymentStatus: "paid",
-
-            paymentIntent:
-              session.payment_intent || null,
-
+            paymentIntent: session.payment_intent || null,
             amount: session.amount_total
               ? session.amount_total / 100
               : existingData.total,
-
             currency: session.currency || "usd",
-
             updatedAt:
               admin.firestore.FieldValue.serverTimestamp(),
           };
@@ -311,7 +302,6 @@ app.post(
       // Clean basket data
       const cleanBasket = basket.map((item) => {
         const price = Number(item.price);
-
         const amount = Number(item.amount || 1);
 
         if (
@@ -336,7 +326,7 @@ app.post(
         };
       });
 
-      // Calculate total
+      // Calculate total on backend
       const total = cleanBasket.reduce(
         (sum, item) =>
           sum + item.price * item.amount,
@@ -402,22 +392,14 @@ app.post(
 
       const orderData = {
         userId,
-
         basket: cleanBasket,
-
         total,
-
         currency: "usd",
-
         paymentStatus: "pending",
-
         sessionId: session.id,
-
         paymentIntent: null,
-
         createdAt:
           admin.firestore.FieldValue.serverTimestamp(),
-
         updatedAt:
           admin.firestore.FieldValue.serverTimestamp(),
       };
@@ -443,7 +425,6 @@ app.post(
 
       return res.status(200).json({
         clientSecret: session.client_secret,
-
         sessionId: session.id,
       });
 
